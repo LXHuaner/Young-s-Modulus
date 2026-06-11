@@ -19,7 +19,7 @@
             border-radius: 28px;
             box-shadow: 0 30px 60px -15px rgba(0,0,0,0.35);
             padding: 36px;
-            max-width: 850px;
+            max-width: 900px;
             width: 100%;
         }
         h1 {
@@ -27,6 +27,19 @@
             background: linear-gradient(135deg, #2b5876, #4e4376);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             font-size: 32px;
+        }
+        .method-row {
+            display: flex; justify-content: center; gap: 12px; margin-bottom: 24px;
+        }
+        .method-btn {
+            background: #e2e8f0; border: none; padding: 10px 24px;
+            border-radius: 12px; font-size: 16px; font-weight: 600;
+            cursor: pointer; transition: 0.2s;
+            color: #4a5568;
+        }
+        .method-btn.active {
+            background: linear-gradient(135deg, #2b5876, #4e4376);
+            color: white;
         }
         .section {
             background: #f8fafc; border-radius: 20px; padding: 20px;
@@ -75,30 +88,31 @@
         .details td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
         .details td:first-child { font-weight: 600; color: #4a5568; }
         .error { color: #b91c1c; background: #fee2e2; padding: 12px; border-radius: 12px; margin-top: 12px; }
+        .chart-container {
+            margin-top: 20px; text-align: center;
+        }
+        canvas {
+            max-width: 100%; height: auto; border-radius: 12px;
+            background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
 
-        /* 手机端适配 */
         @media (max-width: 600px) {
-            .grid2 {
-                grid-template-columns: 1fr;
-            }
-            .card {
-                padding: 20px;
-            }
-            .results {
-                grid-template-columns: 1fr;
-            }
-            h1 {
-                font-size: 24px;
-            }
-            .section {
-                padding: 14px;
-            }
+            .grid2 { grid-template-columns: 1fr; }
+            .card { padding: 20px; }
+            .results { grid-template-columns: 1fr; }
+            h1 { font-size: 24px; }
+            .section { padding: 14px; }
         }
     </style>
 </head>
 <body>
 <div class="card">
     <h1>🔬 光杠杆法杨氏模量 E</h1>
+
+    <div class="method-row">
+        <button class="method-btn active" id="btnChac" onclick="switchMethod('chac')">逐差法</button>
+        <button class="method-btn" id="btnLS" onclick="switchMethod('ls')">最小二乘法</button>
+    </div>
 
     <div class="section">
         <h3>📌 基本物理参数</h3>
@@ -139,7 +153,7 @@
     <div class="section">
         <h3>📋 标尺读数序列（mm）</h3>
         <textarea id="xData" placeholder="示例：12.5 18.3 24.1 29.8 35.6 41.3 47.0 52.7"></textarea>
-        <div class="hint">用空格分隔数据</div>
+        <div class="hint">用空格分隔数据（偶数个）</div>
     </div>
 
     <button class="btn" onclick="compute()">⚡ 计算杨氏模量及不确定度</button>
@@ -148,6 +162,9 @@
         <div class="results" id="cards"></div>
         <div class="details" id="detailsBlock"></div>
         <div id="errorMsg" class="error" style="display: none;"></div>
+        <div class="chart-container" id="chartContainer" style="display: none;">
+            <canvas id="fitChart"></canvas>
+        </div>
     </div>
 </div>
 
@@ -158,6 +175,18 @@
         micrometer: 0.004, // 螺旋测微计允差，用于 d
         scale: 0.2         // 望远镜标尺单次读数允差（可按实际修改）
     };
+
+    let currentMethod = 'chac'; // 默认逐差法
+
+    function switchMethod(method) {
+        currentMethod = method;
+        document.getElementById('btnChac').classList.toggle('active', method === 'chac');
+        document.getElementById('btnLS').classList.toggle('active', method === 'ls');
+        // 如果有结果则重新计算
+        if (document.getElementById('resultArea').style.display !== 'none') {
+            compute();
+        }
+    }
 
     // 科学计数法格式化（Unicode 上标）
     function formatExponential(value, decimalDigits) {
@@ -180,11 +209,213 @@
         return mantissa + '×10' + superExp;
     }
 
+    // 逐差法计算 Δx 及不确定度（返回对象）
+    function computeChac(numbers) {
+        const n = numbers.length;
+        const k = n / 2;
+        const deltas = [];
+        for (let i = 0; i < k; i++) {
+            deltas.push(numbers[i + k] - numbers[i]);
+        }
+        const deltaAvg = deltas.reduce((a,b) => a + b, 0) / k;
+        const Deltax = deltaAvg / k;
+        const deltaStd = k > 1 ? Math.sqrt(deltas.reduce((sum, val) => sum + (val - deltaAvg)**2, 0) / (k - 1)) : 0;
+        const uA_delta_avg = deltaStd / Math.sqrt(k);
+        const uA_Deltax = uA_delta_avg / k;
+        const u_ins = INSTRUMENT_TOLERANCES.scale / Math.sqrt(3);
+        const uB_Deltax = Math.sqrt(2 / (k * k * k)) * u_ins;
+        const u_Deltax = Math.sqrt(uA_Deltax**2 + uB_Deltax**2);
+        return {
+            Deltax,
+            uA_Deltax,
+            uB_Deltax,
+            u_Deltax,
+            deltas,
+            deltaAvg,
+            deltaStd,
+            n,
+            k
+        };
+    }
+
+    // 最小二乘法计算 Δx 及不确定度，返回对象
+    function computeLS(numbers) {
+        const N = numbers.length;
+        const x = Array.from({length: N}, (_, i) => i + 1); // 砝码序号 1..N
+        const y = numbers;
+        const xMean = (N + 1) / 2;
+        const yMean = y.reduce((a,b) => a + b, 0) / N;
+
+        let Sxx = 0, Sxy = 0;
+        for (let i = 0; i < N; i++) {
+            const dx = x[i] - xMean;
+            Sxx += dx * dx;
+            Sxy += dx * (y[i] - yMean);
+        }
+        const slope = Sxy / Sxx;        // Δx
+        const intercept = yMean - slope * xMean;
+
+        // 残差标准差
+        let sumSqRes = 0;
+        for (let i = 0; i < N; i++) {
+            const yPred = slope * x[i] + intercept;
+            sumSqRes += (y[i] - yPred) ** 2;
+        }
+        const sy = N > 2 ? Math.sqrt(sumSqRes / (N - 2)) : 0;
+
+        // 相关系数
+        let Sxx_y = 0, Syy = 0;
+        for (let i = 0; i < N; i++) {
+            Syy += (y[i] - yMean) ** 2;
+        }
+        const r = Sxy / Math.sqrt(Sxx * Syy);
+        const r2 = r * r;
+
+        // A类：斜率的标准不确定度
+        const uA_slope = sy / Math.sqrt(Sxx);
+
+        // B类：标尺读数不确定度传递至斜率
+        const u_ins = INSTRUMENT_TOLERANCES.scale / Math.sqrt(3);
+        const uB_slope = u_ins / Math.sqrt(Sxx);
+
+        const u_Deltax = Math.sqrt(uA_slope**2 + uB_slope**2);
+
+        return {
+            Deltax: slope,
+            uA_Deltax: uA_slope,
+            uB_Deltax: uB_slope,
+            u_Deltax,
+            intercept,
+            r,
+            r2,
+            sy,
+            N,
+            x,
+            y,
+            Sxx
+        };
+    }
+
+    function drawChart(x, y, slope, intercept, r2) {
+        const canvas = document.getElementById('fitChart');
+        const container = document.getElementById('chartContainer');
+        container.style.display = 'block';
+        const rect = container.getBoundingClientRect();
+        const maxWidth = rect.width - 20;
+        const aspect = 1.5;
+        const width = Math.min(maxWidth, 600);
+        const height = width / aspect;
+        canvas.width = width;
+        canvas.height = height;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, width, height);
+
+        const pad = { top: 30, right: 30, bottom: 50, left: 60 };
+        const plotW = width - pad.left - pad.right;
+        const plotH = height - pad.top - pad.bottom;
+
+        // 数据范围
+        const xMin = 0, xMax = x.length + 1;
+        const yAll = y.slice();
+        // 计算拟合线端点
+        const fitY1 = slope * 1 + intercept;
+        const fitY2 = slope * x.length + intercept;
+        const yMin = Math.min(...yAll, fitY1, fitY2) - 1;
+        const yMax = Math.max(...yAll, fitY1, fitY2) + 1;
+
+        const scaleX = val => pad.left + (val - xMin) / (xMax - xMin) * plotW;
+        const scaleY = val => height - pad.bottom - (val - yMin) / (yMax - yMin) * plotH;
+
+        // 网格
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        for (let i = 1; i <= x.length + 1; i++) {
+            const sx = scaleX(i);
+            ctx.moveTo(sx, pad.top);
+            ctx.lineTo(sx, height - pad.bottom);
+        }
+        ctx.stroke();
+
+        // 坐标轴
+        ctx.strokeStyle = '#4a5568';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, pad.top);
+        ctx.lineTo(pad.left, height - pad.bottom);
+        ctx.lineTo(width - pad.right, height - pad.bottom);
+        ctx.stroke();
+
+        // 轴标签
+        ctx.fillStyle = '#4a5568';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        for (let i = 1; i <= x.length + 1; i++) {
+            ctx.fillText(i, scaleX(i), height - pad.bottom + 18);
+        }
+        // 纵轴刻度（整数）
+        const yStep = 1;
+        const yStart = Math.ceil(yMin);
+        const yEnd = Math.floor(yMax);
+        for (let val = yStart; val <= yEnd; val += yStep) {
+            const sy = scaleY(val);
+            ctx.fillText(val, pad.left - 10, sy + 4);
+        }
+        ctx.save();
+        ctx.translate(15, height/2);
+        ctx.rotate(-Math.PI/2);
+        ctx.fillText('标尺读数 (mm)', 0, 0);
+        ctx.restore();
+        ctx.fillText('砝码数', width/2, height - 8);
+
+        // 散点
+        ctx.fillStyle = '#667eea';
+        for (let i = 0; i < x.length; i++) {
+            const sx = scaleX(x[i]);
+            const sy = scaleY(y[i]);
+            ctx.beginPath();
+            ctx.arc(sx, sy, 4, 0, 2*Math.PI);
+            ctx.fill();
+        }
+
+        // 拟合线
+        ctx.strokeStyle = '#e53e3e';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 3]);
+        ctx.beginPath();
+        ctx.moveTo(scaleX(1), scaleY(fitY1));
+        ctx.lineTo(scaleX(x.length), scaleY(fitY2));
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 图例
+        ctx.fillStyle = '#667eea';
+        ctx.fillRect(pad.left + 10, pad.top + 10, 12, 12);
+        ctx.fillStyle = '#4a5568';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('实验数据', pad.left + 28, pad.top + 22);
+
+        ctx.strokeStyle = '#e53e3e';
+        ctx.setLineDash([6, 3]);
+        ctx.beginPath();
+        ctx.moveTo(pad.left + 10, pad.top + 36);
+        ctx.lineTo(pad.left + 24, pad.top + 36);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillText(`拟合线 (R²=${r2.toFixed(5)})`, pad.left + 28, pad.top + 42);
+    }
+
     function compute() {
         const resultArea = document.getElementById('resultArea');
         resultArea.style.display = 'block';
         const errorDiv = document.getElementById('errorMsg');
         errorDiv.style.display = 'none';
+        const chartContainer = document.getElementById('chartContainer');
+        chartContainer.style.display = 'none';
         try {
             const g = parseFloat(document.getElementById('g').value);
             const m_g = parseFloat(document.getElementById('mass').value);
@@ -205,24 +436,59 @@
             if (numbers.length < 2 || numbers.length % 2 !== 0) {
                 throw new Error('标尺读数个数必须为偶数且至少2个！');
             }
-            const n = numbers.length;
-            const k = n / 2;
 
-            const deltas = [];
-            for (let i = 0; i < k; i++) {
-                deltas.push(numbers[i + k] - numbers[i]);
+            // 计算 Δx 相关量
+            let Deltax, uA_Deltax, uB_Deltax, u_Deltax;
+            let detailsHTML = '';
+
+            if (currentMethod === 'chac') {
+                const chacRes = computeChac(numbers);
+                Deltax = chacRes.Deltax;
+                uA_Deltax = chacRes.uA_Deltax;
+                uB_Deltax = chacRes.uB_Deltax;
+                u_Deltax = chacRes.u_Deltax;
+
+                let deltaRows = chacRes.deltas.map((val, idx) =>
+                    `<tr><td>δ${idx} = x${idx + chacRes.k} - x${idx}</td><td>${val.toFixed(4)} mm</td></tr>`
+                ).join('');
+                detailsHTML = `
+                    <h4>📊 逐差法处理 (n=${chacRes.n}, k=${chacRes.k})</h4>
+                    <table>
+                        ${deltaRows}
+                        <tr><td>δ 平均值</td><td>${chacRes.deltaAvg.toFixed(4)} mm</td></tr>
+                        <tr><td>δ 实验标准差 s(δ)</td><td>${chacRes.deltaStd.toFixed(4)} mm</td></tr>
+                        <tr><td>Δx = δ_avg / k</td><td>${Deltax.toFixed(6)} mm</td></tr>
+                        <tr><td>A类 u<sub>A</sub>(Δx)</td><td>${formatExponential(uA_Deltax, 3)} mm</td></tr>
+                        <tr><td>B类 u<sub>B</sub>(Δx)</td><td>${formatExponential(uB_Deltax, 3)} mm</td></tr>
+                        <tr><td>合成 u(Δx)</td><td>${formatExponential(u_Deltax, 3)} mm</td></tr>
+                    </table>
+                `;
+            } else { // 最小二乘法
+                const lsRes = computeLS(numbers);
+                Deltax = lsRes.Deltax;
+                uA_Deltax = lsRes.uA_Deltax;
+                uB_Deltax = lsRes.uB_Deltax;
+                u_Deltax = lsRes.u_Deltax;
+
+                detailsHTML = `
+                    <h4>📈 最小二乘法处理 (n=${lsRes.N})</h4>
+                    <table>
+                        <tr><td>斜率 (Δx)</td><td>${Deltax.toFixed(6)} mm</td></tr>
+                        <tr><td>截距</td><td>${lsRes.intercept.toFixed(4)} mm</td></tr>
+                        <tr><td>相关系数 r</td><td>${lsRes.r.toFixed(5)}</td></tr>
+                        <tr><td>决定系数 R²</td><td>${lsRes.r2.toFixed(5)}</td></tr>
+                        <tr><td>残差标准差 s<sub>y</sub></td><td>${formatExponential(lsRes.sy, 3)} mm</td></tr>
+                        <tr><td>A类 u<sub>A</sub>(Δx)</td><td>${formatExponential(uA_Deltax, 3)} mm</td></tr>
+                        <tr><td>B类 u<sub>B</sub>(Δx)</td><td>${formatExponential(uB_Deltax, 3)} mm</td></tr>
+                        <tr><td>合成 u(Δx)</td><td>${formatExponential(u_Deltax, 3)} mm</td></tr>
+                    </table>
+                `;
+
+                // 绘制图表
+                drawChart(lsRes.x, lsRes.y, Deltax, lsRes.intercept, lsRes.r2);
             }
-            const deltaAvg = deltas.reduce((a,b) => a + b, 0) / k;
-            const Deltax = deltaAvg / k;
 
-            const deltaStd = k > 1 ? Math.sqrt(deltas.reduce((sum, val) => sum + (val - deltaAvg)**2, 0) / (k - 1)) : 0;
-            const uA_delta_avg = deltaStd / Math.sqrt(k);
-            const uA_Deltax = uA_delta_avg / k;
-
-            const u_ins = INSTRUMENT_TOLERANCES.scale / Math.sqrt(3);
-            const uB_Deltax = Math.sqrt(2 / (k * k * k)) * u_ins;
-            const u_Deltax = Math.sqrt(uA_Deltax**2 + uB_Deltax**2);
-
+            // 后续不确定度合成（长度量）
             const toM = (mm) => mm / 1000;
             const u_L = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
             const u_D = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
@@ -265,17 +531,8 @@
                 </div>
             `;
 
-            let deltaRows = deltas.map((val, idx) => `<tr><td>δ${idx} = x${idx+k} - x${idx}</td><td>${val.toFixed(4)} mm</td></tr>`).join('');
-            document.getElementById('detailsBlock').innerHTML = `
-                <h4>📊 逐差法处理 (n=${n}, k=${k})</h4>
-                <table>
-                    ${deltaRows}
-                    <tr><td>δ 平均值</td><td>${deltaAvg.toFixed(4)} mm</td></tr>
-                    <tr><td>δ 实验标准差 s(δ)</td><td>${deltaStd.toFixed(4)} mm</td></tr>
-                    <tr><td>Δx = δ_avg / k</td><td>${Deltax.toFixed(6)} mm = ${formatExponential(Deltax_m, 3)} m</td></tr>
-                    <tr><td>A类 u<sub>A</sub>(Δx)</td><td>${formatExponential(uA_Deltax, 3)} mm</td></tr>
-                    <tr><td>B类 u<sub>B</sub>(Δx)</td><td>${formatExponential(uB_Deltax, 3)} mm</td></tr>
-                    <tr><td>合成 u(Δx)</td><td>${formatExponential(u_Deltax, 3)} mm</td></tr>
+            document.getElementById('detailsBlock').innerHTML = detailsHTML + `
+                <table style="margin-top: 16px;">
                     <tr style="border-top:2px solid #cbd5e0;">
                         <td>长度量标准不确定度 (m)</td>
                         <td>u(L) = ${formatExponential(u_L, 2)}， u(D) = ${formatExponential(u_D, 2)}， u(d) = ${formatExponential(u_d, 2)}， u(b) = ${formatExponential(u_b, 2)}</td>
