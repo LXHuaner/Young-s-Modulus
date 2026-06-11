@@ -95,6 +95,12 @@
             max-width: 100%; height: auto; border-radius: 12px;
             background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
+        .download-btn {
+            background: #4f46e5; color: white; border: none; padding: 10px 20px;
+            border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer;
+            margin-top: 10px; transition: 0.2s;
+        }
+        .download-btn:hover { background: #4338ca; }
 
         @media (max-width: 600px) {
             .grid2 { grid-template-columns: 1fr; }
@@ -164,6 +170,8 @@
         <div id="errorMsg" class="error" style="display: none;"></div>
         <div class="chart-container" id="chartContainer" style="display: none;">
             <canvas id="fitChart"></canvas>
+            <br>
+            <button class="download-btn" onclick="downloadChart()">📥 下载高清图表</button>
         </div>
     </div>
 </div>
@@ -177,12 +185,12 @@
     };
 
     let currentMethod = 'chac'; // 默认逐差法
+    let chartData = null; // 存储当前图表数据供下载
 
     function switchMethod(method) {
         currentMethod = method;
         document.getElementById('btnChac').classList.toggle('active', method === 'chac');
         document.getElementById('btnLS').classList.toggle('active', method === 'ls');
-        // 如果有结果则重新计算
         if (document.getElementById('resultArea').style.display !== 'none') {
             compute();
         }
@@ -209,7 +217,7 @@
         return mantissa + '×10' + superExp;
     }
 
-    // 逐差法计算 Δx 及不确定度（返回对象）
+    // 逐差法计算 Δx 及不确定度
     function computeChac(numbers) {
         const n = numbers.length;
         const k = n / 2;
@@ -225,106 +233,54 @@
         const u_ins = INSTRUMENT_TOLERANCES.scale / Math.sqrt(3);
         const uB_Deltax = Math.sqrt(2 / (k * k * k)) * u_ins;
         const u_Deltax = Math.sqrt(uA_Deltax**2 + uB_Deltax**2);
-        return {
-            Deltax,
-            uA_Deltax,
-            uB_Deltax,
-            u_Deltax,
-            deltas,
-            deltaAvg,
-            deltaStd,
-            n,
-            k
-        };
+        return { Deltax, uA_Deltax, uB_Deltax, u_Deltax, deltas, deltaAvg, deltaStd, n, k };
     }
 
-    // 最小二乘法计算 Δx 及不确定度，返回对象
+    // 最小二乘法计算 Δx 及不确定度
     function computeLS(numbers) {
         const N = numbers.length;
-        const x = Array.from({length: N}, (_, i) => i + 1); // 砝码序号 1..N
+        const x = Array.from({length: N}, (_, i) => i + 1);
         const y = numbers;
         const xMean = (N + 1) / 2;
         const yMean = y.reduce((a,b) => a + b, 0) / N;
-
         let Sxx = 0, Sxy = 0;
         for (let i = 0; i < N; i++) {
             const dx = x[i] - xMean;
             Sxx += dx * dx;
             Sxy += dx * (y[i] - yMean);
         }
-        const slope = Sxy / Sxx;        // Δx
+        const slope = Sxy / Sxx;
         const intercept = yMean - slope * xMean;
-
-        // 残差标准差
         let sumSqRes = 0;
         for (let i = 0; i < N; i++) {
             const yPred = slope * x[i] + intercept;
             sumSqRes += (y[i] - yPred) ** 2;
         }
         const sy = N > 2 ? Math.sqrt(sumSqRes / (N - 2)) : 0;
-
-        // 相关系数
-        let Sxx_y = 0, Syy = 0;
-        for (let i = 0; i < N; i++) {
-            Syy += (y[i] - yMean) ** 2;
-        }
+        let Syy = 0;
+        for (let i = 0; i < N; i++) Syy += (y[i] - yMean) ** 2;
         const r = Sxy / Math.sqrt(Sxx * Syy);
         const r2 = r * r;
-
-        // A类：斜率的标准不确定度
         const uA_slope = sy / Math.sqrt(Sxx);
-
-        // B类：标尺读数不确定度传递至斜率
         const u_ins = INSTRUMENT_TOLERANCES.scale / Math.sqrt(3);
         const uB_slope = u_ins / Math.sqrt(Sxx);
-
         const u_Deltax = Math.sqrt(uA_slope**2 + uB_slope**2);
-
-        return {
-            Deltax: slope,
-            uA_Deltax: uA_slope,
-            uB_Deltax: uB_slope,
-            u_Deltax,
-            intercept,
-            r,
-            r2,
-            sy,
-            N,
-            x,
-            y,
-            Sxx
-        };
+        return { Deltax: slope, uA_Deltax: uA_slope, uB_Deltax: uB_slope, u_Deltax, intercept, r, r2, sy, N, x, y, Sxx };
     }
 
-    function drawChart(x, y, slope, intercept, r2) {
-        const canvas = document.getElementById('fitChart');
-        const container = document.getElementById('chartContainer');
-        container.style.display = 'block';
-        const rect = container.getBoundingClientRect();
-        const maxWidth = rect.width - 20;
-        const aspect = 1.5;
-        const width = Math.min(maxWidth, 600);
-        const height = width / aspect;
-        canvas.width = width;
-        canvas.height = height;
-        canvas.style.width = width + 'px';
-        canvas.style.height = height + 'px';
-
+    // 通用绘图函数（可指定 canvas 和尺寸）
+    function renderChart(canvas, width, height, x, y, slope, intercept, r2) {
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, width, height);
-
-        const pad = { top: 30, right: 30, bottom: 50, left: 60 };
+        const pad = { top: 40, right: 40, bottom: 60, left: 70 };
         const plotW = width - pad.left - pad.right;
         const plotH = height - pad.top - pad.bottom;
 
-        // 数据范围
         const xMin = 0, xMax = x.length + 1;
-        const yAll = y.slice();
-        // 计算拟合线端点
         const fitY1 = slope * 1 + intercept;
         const fitY2 = slope * x.length + intercept;
-        const yMin = Math.min(...yAll, fitY1, fitY2) - 1;
-        const yMax = Math.max(...yAll, fitY1, fitY2) + 1;
+        const yMin = Math.min(...y, fitY1, fitY2) - 1;
+        const yMax = Math.max(...y, fitY1, fitY2) + 1;
 
         const scaleX = val => pad.left + (val - xMin) / (xMax - xMin) * plotW;
         const scaleY = val => height - pad.bottom - (val - yMin) / (yMax - yMin) * plotH;
@@ -349,42 +305,40 @@
         ctx.lineTo(width - pad.right, height - pad.bottom);
         ctx.stroke();
 
-        // 轴标签
+        // 标签
         ctx.fillStyle = '#4a5568';
-        ctx.font = '12px sans-serif';
+        ctx.font = '14px sans-serif';
         ctx.textAlign = 'center';
         for (let i = 1; i <= x.length + 1; i++) {
-            ctx.fillText(i, scaleX(i), height - pad.bottom + 18);
+            ctx.fillText(i, scaleX(i), height - pad.bottom + 22);
         }
-        // 纵轴刻度（整数）
         const yStep = 1;
         const yStart = Math.ceil(yMin);
         const yEnd = Math.floor(yMax);
         for (let val = yStart; val <= yEnd; val += yStep) {
-            const sy = scaleY(val);
-            ctx.fillText(val, pad.left - 10, sy + 4);
+            ctx.fillText(val, pad.left - 12, scaleY(val) + 4);
         }
         ctx.save();
-        ctx.translate(15, height/2);
+        ctx.translate(18, height/2);
         ctx.rotate(-Math.PI/2);
+        ctx.font = '15px sans-serif';
         ctx.fillText('标尺读数 (mm)', 0, 0);
         ctx.restore();
-        ctx.fillText('砝码数', width/2, height - 8);
+        ctx.font = '14px sans-serif';
+        ctx.fillText('砝码数', width/2, height - 10);
 
         // 散点
         ctx.fillStyle = '#667eea';
         for (let i = 0; i < x.length; i++) {
-            const sx = scaleX(x[i]);
-            const sy = scaleY(y[i]);
             ctx.beginPath();
-            ctx.arc(sx, sy, 4, 0, 2*Math.PI);
+            ctx.arc(scaleX(x[i]), scaleY(y[i]), 5, 0, 2*Math.PI);
             ctx.fill();
         }
 
         // 拟合线
         ctx.strokeStyle = '#e53e3e';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 3]);
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([8, 4]);
         ctx.beginPath();
         ctx.moveTo(scaleX(1), scaleY(fitY1));
         ctx.lineTo(scaleX(x.length), scaleY(fitY2));
@@ -393,20 +347,60 @@
 
         // 图例
         ctx.fillStyle = '#667eea';
-        ctx.fillRect(pad.left + 10, pad.top + 10, 12, 12);
+        ctx.fillRect(pad.left + 15, pad.top + 15, 14, 14);
         ctx.fillStyle = '#4a5568';
-        ctx.font = '12px sans-serif';
+        ctx.font = '13px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('实验数据', pad.left + 28, pad.top + 22);
+        ctx.fillText('实验数据', pad.left + 35, pad.top + 28);
 
         ctx.strokeStyle = '#e53e3e';
-        ctx.setLineDash([6, 3]);
+        ctx.setLineDash([8, 4]);
         ctx.beginPath();
-        ctx.moveTo(pad.left + 10, pad.top + 36);
-        ctx.lineTo(pad.left + 24, pad.top + 36);
+        ctx.moveTo(pad.left + 15, pad.top + 45);
+        ctx.lineTo(pad.left + 33, pad.top + 45);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillText(`拟合线 (R²=${r2.toFixed(5)})`, pad.left + 28, pad.top + 42);
+        ctx.fillText(`拟合线 (R²=${r2.toFixed(5)})`, pad.left + 35, pad.top + 58);
+    }
+
+    function drawChart(x, y, slope, intercept, r2) {
+        const container = document.getElementById('chartContainer');
+        container.style.display = 'block';
+        const canvas = document.getElementById('fitChart');
+        const maxWidth = container.clientWidth - 20;
+        const width = Math.min(maxWidth, 600);
+        const height = width / 1.5;
+        canvas.width = width;
+        canvas.height = height;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        renderChart(canvas, width, height, x, y, slope, intercept, r2);
+
+        // 保存数据供下载
+        chartData = { x, y, slope, intercept, r2 };
+    }
+
+    function downloadChart() {
+        if (!chartData) return;
+        const { x, y, slope, intercept, r2 } = chartData;
+        // 创建高清 canvas
+        const highResCanvas = document.createElement('canvas');
+        const width = 800;
+        const height = 533;
+        highResCanvas.width = width;
+        highResCanvas.height = height;
+        renderChart(highResCanvas, width, height, x, y, slope, intercept, r2);
+
+        highResCanvas.toBlob(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '杨氏模量拟合图.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 'image/png');
     }
 
     function compute() {
@@ -416,28 +410,25 @@
         errorDiv.style.display = 'none';
         const chartContainer = document.getElementById('chartContainer');
         chartContainer.style.display = 'none';
+        chartData = null;
         try {
             const g = parseFloat(document.getElementById('g').value);
             const m_g = parseFloat(document.getElementById('mass').value);
             const m = m_g / 1000;
             const mg = m * g;
-
             const L = parseFloat(document.getElementById('L').value);
             const D = parseFloat(document.getElementById('D').value);
             const d = parseFloat(document.getElementById('d').value);
             const b = parseFloat(document.getElementById('b').value);
-
             if (isNaN(L) || isNaN(D) || isNaN(d) || isNaN(b)) {
                 throw new Error('请完整填写所有长度测量值！');
             }
-
             const raw = document.getElementById('xData').value.trim();
             const numbers = raw.split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
             if (numbers.length < 2 || numbers.length % 2 !== 0) {
                 throw new Error('标尺读数个数必须为偶数且至少2个！');
             }
 
-            // 计算 Δx 相关量
             let Deltax, uA_Deltax, uB_Deltax, u_Deltax;
             let detailsHTML = '';
 
@@ -447,7 +438,6 @@
                 uA_Deltax = chacRes.uA_Deltax;
                 uB_Deltax = chacRes.uB_Deltax;
                 u_Deltax = chacRes.u_Deltax;
-
                 let deltaRows = chacRes.deltas.map((val, idx) =>
                     `<tr><td>δ${idx} = x${idx + chacRes.k} - x${idx}</td><td>${val.toFixed(4)} mm</td></tr>`
                 ).join('');
@@ -463,13 +453,12 @@
                         <tr><td>合成 u(Δx)</td><td>${formatExponential(u_Deltax, 3)} mm</td></tr>
                     </table>
                 `;
-            } else { // 最小二乘法
+            } else {
                 const lsRes = computeLS(numbers);
                 Deltax = lsRes.Deltax;
                 uA_Deltax = lsRes.uA_Deltax;
                 uB_Deltax = lsRes.uB_Deltax;
                 u_Deltax = lsRes.u_Deltax;
-
                 detailsHTML = `
                     <h4>📈 最小二乘法处理 (n=${lsRes.N})</h4>
                     <table>
@@ -483,30 +472,20 @@
                         <tr><td>合成 u(Δx)</td><td>${formatExponential(u_Deltax, 3)} mm</td></tr>
                     </table>
                 `;
-
-                // 绘制图表
                 drawChart(lsRes.x, lsRes.y, Deltax, lsRes.intercept, lsRes.r2);
             }
 
-            // 后续不确定度合成（长度量）
             const toM = (mm) => mm / 1000;
             const u_L = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
             const u_D = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
             const u_d = (INSTRUMENT_TOLERANCES.micrometer / Math.sqrt(3)) / 1000;
             const u_b = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
             const u_Deltax_m = u_Deltax / 1000;
-
-            const L_m = toM(L);
-            const D_m = toM(D);
-            const d_m = toM(d);
-            const b_m = toM(b);
-            const Deltax_m = toM(Deltax);
-
+            const L_m = toM(L), D_m = toM(D), d_m = toM(d), b_m = toM(b), Deltax_m = toM(Deltax);
             const numerator = 8 * mg * L_m * D_m;
             const denominator = Math.PI * d_m * d_m * b_m * Deltax_m;
             const E = numerator / denominator;
             const E_GPa = E / 1e9;
-
             const rel_sq = (u_L/L_m)**2 + (u_D/D_m)**2 + (2*u_d/d_m)**2 + (u_b/b_m)**2 + (u_Deltax_m/Deltax_m)**2;
             const relE = Math.sqrt(rel_sq);
             const u_E = E * relE;
@@ -543,7 +522,6 @@
                     </tr>
                 </table>
             `;
-
         } catch (err) {
             errorDiv.style.display = 'block';
             errorDiv.textContent = '❌ ' + err.message;
