@@ -69,12 +69,33 @@
         .details {
             margin-top: 20px; background: #f1f5f9; border-radius: 16px;
             padding: 20px; border: 1px solid #e2e8f0;
+            overflow-x: auto; /* 表格在窄屏可横向滚动 */
         }
         .details h4 { margin-bottom: 12px; color: #2d3748; }
-        .details table { width: 100%; border-collapse: collapse; }
+        .details table { width: 100%; border-collapse: collapse; min-width: 500px; }
         .details td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
         .details td:first-child { font-weight: 600; color: #4a5568; }
         .error { color: #b91c1c; background: #fee2e2; padding: 12px; border-radius: 12px; margin-top: 12px; }
+
+        /* 响应式优化 */
+        @media (max-width: 600px) {
+            body { padding: 10px; }
+            .card { padding: 20px; border-radius: 20px; }
+            h1 { font-size: 24px; margin-bottom: 16px; }
+            .section { padding: 16px; margin-bottom: 16px; }
+            .section h3 { font-size: 16px; }
+            .grid2 { grid-template-columns: 1fr; gap: 12px; }
+            .input-group label { font-size: 13px; }
+            .input-group input { padding: 8px 10px; font-size: 14px; }
+            textarea { height: 100px; font-size: 13px; }
+            .btn { padding: 14px; font-size: 16px; }
+            .results { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+            .result-card { padding: 14px; }
+            .result-card .value { font-size: 22px; }
+            .result-card .label { font-size: 12px; }
+            .details { padding: 12px; }
+            .details td { padding: 6px 8px; font-size: 13px; }
+        }
     </style>
 </head>
 <body>
@@ -177,7 +198,6 @@
             const d = parseFloat(document.getElementById('d').value);
             const b = parseFloat(document.getElementById('b').value);
 
-            // 检查长度值是否有效
             if (isNaN(L) || isNaN(D) || isNaN(d) || isNaN(b)) {
                 throw new Error('请完整填写所有长度测量值！');
             }
@@ -190,52 +210,44 @@
             const n = numbers.length;
             const k = n / 2;
 
-            // 逐差法计算 Δx
             const deltas = [];
             for (let i = 0; i < k; i++) {
                 deltas.push(numbers[i + k] - numbers[i]);
             }
             const deltaAvg = deltas.reduce((a,b) => a + b, 0) / k;
-            const Deltax = deltaAvg / k; // mm
+            const Deltax = deltaAvg / k;
 
-            // A类不确定度
             const deltaStd = k > 1 ? Math.sqrt(deltas.reduce((sum, val) => sum + (val - deltaAvg)**2, 0) / (k - 1)) : 0;
             const uA_delta_avg = deltaStd / Math.sqrt(k);
-            const uA_Deltax = uA_delta_avg / k; // mm
+            const uA_Deltax = uA_delta_avg / k;
 
-            // B类不确定度（标尺读数）
             const u_ins = INSTRUMENT_TOLERANCES.scale / Math.sqrt(3);
-            const uB_Deltax = Math.sqrt(2 / (k * k * k)) * u_ins; // mm
-            const u_Deltax = Math.sqrt(uA_Deltax**2 + uB_Deltax**2); // mm
+            const uB_Deltax = Math.sqrt(2 / (k * k * k)) * u_ins;
+            const u_Deltax = Math.sqrt(uA_Deltax**2 + uB_Deltax**2);
 
-            // 长度量标准不确定度（转为 m）
             const toM = (mm) => mm / 1000;
             const u_L = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
             const u_D = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
             const u_d = (INSTRUMENT_TOLERANCES.micrometer / Math.sqrt(3)) / 1000;
             const u_b = (INSTRUMENT_TOLERANCES.ruler / Math.sqrt(3)) / 1000;
-            const u_Deltax_m = u_Deltax / 1000; // mm → m
+            const u_Deltax_m = u_Deltax / 1000;
 
-            // 各量转为 m
             const L_m = toM(L);
             const D_m = toM(D);
             const d_m = toM(d);
             const b_m = toM(b);
             const Deltax_m = toM(Deltax);
 
-            // 计算杨氏模量
             const numerator = 8 * mg * L_m * D_m;
             const denominator = Math.PI * d_m * d_m * b_m * Deltax_m;
-            const E = numerator / denominator; // Pa
+            const E = numerator / denominator;
             const E_GPa = E / 1e9;
 
-            // 合成相对不确定度（所有量已统一为 m）
             const rel_sq = (u_L/L_m)**2 + (u_D/D_m)**2 + (2*u_d/d_m)**2 + (u_b/b_m)**2 + (u_Deltax_m/Deltax_m)**2;
             const relE = Math.sqrt(rel_sq);
-            const u_E = E * relE;          // 合成不确定度，单位 Pa
-            const u_E_GPa = u_E / 1e9;     // 转为 GPa
+            const u_E = E * relE;
+            const u_E_GPa = u_E / 1e9;
 
-            // 显示卡片
             document.getElementById('cards').innerHTML = `
                 <div class="result-card">
                     <div class="value">${E_GPa.toPrecision(4)} GPa</div>
@@ -255,7 +267,6 @@
                 </div>
             `;
 
-            // 详细数据表格
             let deltaRows = deltas.map((val, idx) => `<tr><td>δ${idx} = x${idx+k} - x${idx}</td><td>${val.toFixed(4)} mm</td></tr>`).join('');
             document.getElementById('detailsBlock').innerHTML = `
                 <h4>📊 逐差法处理 (n=${n}, k=${k})</h4>
